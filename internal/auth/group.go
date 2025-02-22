@@ -18,12 +18,30 @@ type Group struct {
 	Users []string
 }
 
-// Creates a new instance of Group.
+// NewGroup creates a new Group with the specified name and list of users.
+// Parameters:
+//   - name: The name of the group.
+//   - users: A slice of strings representing the users in the group.
+//
+// Returns:
+//
+//	A pointer to the newly created Group.
 func NewGroup(name string, users []string) *Group {
 	return &Group{Name: name, Users: users}
 }
 
-// Evaluate whether a user is a member of the current group.
+// Evaluate checks if a given user is part of the group.
+// It returns true if the user is found in the group's user list, otherwise false.
+// If the provided user string is empty, it returns an error indicating that the group name is empty.
+//
+// Parameters:
+//
+//	user - the username to be checked within the group.
+//
+// Returns:
+//
+//	bool - true if the user is in the group, false otherwise.
+//	error - an error if the user string is empty.
 func (group *Group) Evaluate(user string) (bool, error) {
 	if user == "" {
 		return false, errors.New("group name is empty")
