@@ -9,3 +9,8 @@ type PolicyEvaluationResult struct {
 	// The permissions that the user has.
 	Permissions []string
 }
+
+// Creates a new instance of PolicyEvaluationResult.
+func NewPolicyEvaluationResult(groups []string, permissions []string) *PolicyEvaluationResult {
+	return &PolicyEvaluationResult{Groups: groups, Permissions: permissions}
+}
