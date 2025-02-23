@@ -10,11 +10,7 @@ import (
 // Given a user the group instance can evaluate whether this user
 // is a member of the specified group.
 type Group struct {
-
-	// The Name of the group.
-	Name string
-
-	// The collection of Users that are members of the group.
+	Name  string
 	Users []string
 }
 
@@ -44,7 +40,7 @@ func NewGroup(name string, users []string) *Group {
 //	error - an error if the user string is empty.
 func (group *Group) Evaluate(user string) (bool, error) {
 	if user == "" {
-		return false, errors.New("group name is empty")
+		return false, errors.New("user is empty")
 	}
 
 	return slices.Contains(group.Users, user), nil
