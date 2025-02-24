@@ -1,4 +1,4 @@
-package auth
+package authz
 
 // Defines the operations needed to evaluate users against a policy instance.
 type PolicyOperations interface {

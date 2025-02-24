@@ -1,4 +1,4 @@
-package auth
+package authz
 
 // Represents the result of a policy evaluation for a specific user.
 type PolicyEvaluationResult struct {
