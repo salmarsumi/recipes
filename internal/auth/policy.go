@@ -40,19 +40,20 @@ func (policy *Policy) Evaluate(user string) (*PolicyEvaluationResult, error) {
 	groups := shared.Filter(policy.Groups, func(group Group) bool {
 		result, error := group.Evaluate(user)
 		if error != nil {
-			return result
+			return false
 		}
-		return false
+		return result
 	}, func(group Group) string {
 		return group.Name
 	})
 
+	// get the groups permissions
 	permissions := shared.Filter(policy.Permissions, func(permission Permission) bool {
 		result, error := permission.Evaluate(groups)
 		if error != nil {
-			return result
+			return false
 		}
-		return false
+		return result
 	}, func(permission Permission) string {
 		return permission.Name
 	})
