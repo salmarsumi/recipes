@@ -11,5 +11,5 @@ type PolicyManager[TGroupId any, TPermissionId any, TUserId any] interface {
 	DeleteGroup(groupId TGroupId) error
 	ChangeGroupName(groupId TGroupId, newGroupName string) error
 	DeleteUser(userId TUserId) error
-	ReadPolicy() (authz.Policy, error)
+	ReadPolicy() (*authz.Policy, error)
 }
