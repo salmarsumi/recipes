@@ -16,38 +16,45 @@ func TestPolicyStoreError_Error(t *testing.T) {
 	}{
 		{
 			name:                "DefaultError",
-			err:                 defaultError(),
+			err:                 NewDefaultError(),
 			expectedMsg:         string(defaultErrorDescription),
 			expectedDescription: defaultErrorDescription,
 			expectedCode:        DefaultError,
 		},
 		{
 			name:                "ConcurrencyError",
-			err:                 concurrencyError(),
+			err:                 NewConcurrencyError(),
 			expectedMsg:         string(concurrencyDescription),
 			expectedDescription: concurrencyDescription,
 			expectedCode:        Concurrency,
 		},
 		{
 			name:                "GroupNotFoundError",
-			err:                 groupNotFoundError(),
+			err:                 NewGroupNotFoundError(),
 			expectedMsg:         string(groupNotFoundDescription),
 			expectedDescription: groupNotFoundDescription,
 			expectedCode:        GroupNotFound,
 		},
 		{
 			name:                "DuplicateGroupNameError",
-			err:                 duplicateGroupNameError(),
+			err:                 NewDuplicateGroupNameError(),
 			expectedMsg:         string(duplicateGroupNameDescription),
 			expectedDescription: duplicateGroupNameDescription,
 			expectedCode:        DuplicateGroupName,
 		},
 		{
 			name:                "NoUserRecordsDeletedError",
-			err:                 noUserRecordsDeletedError(),
+			err:                 NewNoUserRecordsDeletedError(),
 			expectedMsg:         string(noUserRecordsDeletedDescription),
 			expectedDescription: noUserRecordsDeletedDescription,
 			expectedCode:        NoUserRecordsDeleted,
+		},
+		{
+			name:                "DataBaseError",
+			err:                 NewDataBaseError(),
+			expectedMsg:         string(databaseErrorDescription),
+			expectedDescription: databaseErrorDescription,
+			expectedCode:        DatabaseError,
 		},
 	}
 

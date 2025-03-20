@@ -8,6 +8,7 @@ const (
 	GroupNotFound
 	DuplicateGroupName
 	NoUserRecordsDeleted
+	DatabaseError
 )
 
 type ErrordDescription string
@@ -18,6 +19,7 @@ const (
 	groupNotFoundDescription        = "The group was not found"
 	duplicateGroupNameDescription   = "The group name already exists"
 	noUserRecordsDeletedDescription = "No user records were deleted"
+	databaseErrorDescription        = "An error occurred while interacting with the database"
 )
 
 // PolicyError represents an error that occurred during the policy store operations.
@@ -32,37 +34,44 @@ func (e *PolicyStoreError) Error() string {
 	return string(e.Description)
 }
 
-func defaultError() *PolicyStoreError {
+func NewDefaultError() *PolicyStoreError {
 	return &PolicyStoreError{
 		Code:        DefaultError,
 		Description: defaultErrorDescription,
 	}
 }
 
-func concurrencyError() *PolicyStoreError {
+func NewConcurrencyError() *PolicyStoreError {
 	return &PolicyStoreError{
 		Code:        Concurrency,
 		Description: concurrencyDescription,
 	}
 }
 
-func groupNotFoundError() *PolicyStoreError {
+func NewGroupNotFoundError() *PolicyStoreError {
 	return &PolicyStoreError{
 		Code:        GroupNotFound,
 		Description: groupNotFoundDescription,
 	}
 }
 
-func duplicateGroupNameError() *PolicyStoreError {
+func NewDuplicateGroupNameError() *PolicyStoreError {
 	return &PolicyStoreError{
 		Code:        DuplicateGroupName,
 		Description: duplicateGroupNameDescription,
 	}
 }
 
-func noUserRecordsDeletedError() *PolicyStoreError {
+func NewNoUserRecordsDeletedError() *PolicyStoreError {
 	return &PolicyStoreError{
 		Code:        NoUserRecordsDeleted,
 		Description: noUserRecordsDeletedDescription,
+	}
+}
+
+func NewDataBaseError() *PolicyStoreError {
+	return &PolicyStoreError{
+		Code:        DatabaseError,
+		Description: databaseErrorDescription,
 	}
 }
