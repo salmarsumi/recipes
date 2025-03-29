@@ -5,12 +5,21 @@ import (
 	"log/slog"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/salmarsumi/recipes/internal/authz/store"
 )
 
+// pgPool is an interface that represents a pool of Postgres connections.
 type pgPool interface {
-	Acquire(ctx context.Context) (*pgxpool.Conn, error)
+	Acquire(ctx context.Context) (pgConn, error)
+}
+
+// pgConn is an interface that represents a Postgres connection.
+type pgConn interface {
+	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
+	Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error)
+	Begin(ctx context.Context) (pgx.Tx, error)
+	Release()
 }
 
 // PostgresPolicyManager is a Postgres implementation of the PolicyManager interface.
@@ -25,7 +34,7 @@ func NewPostgresPolicyManager(db pgPool, logger *slog.Logger) *PostgresPolicyMan
 }
 
 // UpdateGroupPermissions updates the permissions for the specified group.
-func (manager *PostgresPolicyManager) UpdateGroupPermissions(ctx context.Context, groupId int, permissions []string) error {
+func (manager *PostgresPolicyManager) UpdateGroupPermissions(ctx context.Context, groupId int, permissions []int) error {
 	logger := manager.logger.With("group_id", groupId)
 	conn, err := manager.db.Acquire(ctx)
 	if err != nil {
@@ -59,16 +68,19 @@ func (manager *PostgresPolicyManager) UpdateGroupPermissions(ctx context.Context
 		}
 	}()
 
-	// update the group permissions
-	_, err = tx.Exec(ctx, "DELETE FROM groups_permissions WHERE group_id = $1", groupId)
+	// merge the new permissions with the existing ones
+	_, err = tx.Exec(ctx, `
+	WITH new_permissions AS (SELECT unnest($1::int[]) AS permission_id)
+	MERGE INTO group_permissions gp
+	USING new_permissions np
+	ON gp.group_id = $2 AND gp.permission_id = np.permission_id
+	WHEN NOT MATCHED BY TARGET THEN
+		INSERT (group_id, permission_id) VALUES ($2, np.permission_id)
+	WHEN NOT MATCHED BY SOURCE THEN
+		DELETE;
+	`, permissions, groupId)
 	if err != nil {
-		logger.Error("failed to delete group permissions", "error", err)
-		return store.NewDataBaseError()
-	}
-
-	_, err = tx.Exec(ctx, "INSERT INTO groups_permissions (group_id, permission_id) VALUES $1", groupId, permissions)
-	if err != nil {
-		logger.Error("failed to insert group permissions", "error", err)
+		logger.Error("failed to merge group permissions", "error", err)
 		return store.NewDataBaseError()
 	}
 
@@ -88,6 +100,19 @@ func (manager *PostgresPolicyManager) UpdateGroupPermissions(ctx context.Context
 		logger.Error("failed to commit transaction", "error", err)
 		return store.NewDataBaseError()
 	}
+
+	return nil
+}
+
+// UpdateGroupUsers updates the users for the specified group.
+func (manager *PostgresPolicyManager) UpdateGroupUsers(ctx context.Context, groupId int, users []string) error {
+	logger := manager.logger.With("group_id", groupId)
+	conn, err := manager.db.Acquire(ctx)
+	if err != nil {
+		logger.Error("failed to acquire database connection", "error", err)
+		return store.NewDataBaseError()
+	}
+	defer conn.Release()
 
 	return nil
 }
