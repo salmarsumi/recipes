@@ -21,7 +21,7 @@ CREATE TABLE subjects (
 );
 
 -- Create table for Group Permission
-CREATE TABLE groups_permissions (
+CREATE TABLE group_permissions (
     group_id INT,
     permission_id INT,
     PRIMARY KEY (group_id, permission_id),
