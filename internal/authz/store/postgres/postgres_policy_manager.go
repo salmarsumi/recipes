@@ -2,49 +2,39 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/salmarsumi/recipes/internal/authz/store"
 )
 
-// pgPool is an interface that represents a pool of Postgres connections.
-type pgPool interface {
-	Acquire(ctx context.Context) (pgConn, error)
-}
-
-// pgConn is an interface that represents a Postgres connection.
-type pgConn interface {
+// pgDb is an interface that represents a pool of Postgres connections.
+type pgDb interface {
 	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
 	Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error)
 	Begin(ctx context.Context) (pgx.Tx, error)
-	Release()
 }
 
 // PostgresPolicyManager is a Postgres implementation of the PolicyManager interface.
 type PostgresPolicyManager struct {
-	db     pgPool
+	db     pgDb
 	logger *slog.Logger
 }
 
 // NewPostgresPolicyManager creates a new PostgresPolicyManager instance.
-func NewPostgresPolicyManager(db pgPool, logger *slog.Logger) *PostgresPolicyManager {
+func NewPostgresPolicyManager(db pgDb, logger *slog.Logger) *PostgresPolicyManager {
 	return &PostgresPolicyManager{db: db, logger: logger}
 }
 
 // UpdateGroupPermissions updates the permissions for the specified group.
 func (manager *PostgresPolicyManager) UpdateGroupPermissions(ctx context.Context, groupId int, permissions []int) error {
 	logger := manager.logger.With("group_id", groupId)
-	conn, err := manager.db.Acquire(ctx)
-	if err != nil {
-		logger.Error("failed to acquire database connection", "error", err)
-		return store.NewDataBaseError()
-	}
-	defer conn.Release()
 
 	var version int
-	err = conn.QueryRow(ctx, "SELECT version FROM groups WHERE id = $1", groupId).Scan(&version)
+	err := manager.db.QueryRow(ctx, "SELECT version FROM groups WHERE id = $1", groupId).Scan(&version)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			logger.Error("group not found")
@@ -56,7 +46,7 @@ func (manager *PostgresPolicyManager) UpdateGroupPermissions(ctx context.Context
 	}
 
 	// start a new transaction
-	tx, err := conn.Begin(ctx)
+	tx, err := manager.db.Begin(ctx)
 	if err != nil {
 		logger.Error("failed to start transaction", "error", err)
 		return store.NewDataBaseError()
@@ -104,15 +94,28 @@ func (manager *PostgresPolicyManager) UpdateGroupPermissions(ctx context.Context
 	return nil
 }
 
+// CreateGroup creates a new group.
+func (manager *PostgresPolicyManager) CreateGroup(ctx context.Context, groupName string) (int, error) {
+	logger := manager.logger.With("group_name", groupName)
+	var id int
+	err := manager.db.QueryRow(ctx, "INSERT INTO groups (name, version) VALUES ($1, 1) RETURNING id", groupName).Scan(&id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
+			logger.Error("group name already exists")
+			return 0, store.NewDuplicateGroupNameError()
+		}
+
+		logger.Error("failed to create group", "error", err)
+		return 0, store.NewDataBaseError()
+	}
+	logger.Info("group created successfully", "group_id", id)
+	return id, nil
+}
+
 // UpdateGroupUsers updates the users for the specified group.
 func (manager *PostgresPolicyManager) UpdateGroupUsers(ctx context.Context, groupId int, users []string) error {
-	logger := manager.logger.With("group_id", groupId)
-	conn, err := manager.db.Acquire(ctx)
-	if err != nil {
-		logger.Error("failed to acquire database connection", "error", err)
-		return store.NewDataBaseError()
-	}
-	defer conn.Release()
+	//logger := manager.logger.With("group_id", groupId)
 
 	return nil
 }

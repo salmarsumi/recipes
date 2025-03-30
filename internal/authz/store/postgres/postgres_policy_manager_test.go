@@ -15,37 +15,23 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// MockPgPool is a mock implementation of the pgPool interface
-type MockPgPool struct {
+// MockPgDb is a mock implementation of the pgPool interface
+type MockPgDb struct {
 	mock.Mock
 }
 
-func (m *MockPgPool) Acquire(ctx context.Context) (pgConn, error) {
-	args := m.Called(ctx)
-	return args.Get(0).(pgConn), args.Error(1)
-}
-
-// MockPgConn is a mock implementation of the pgConn interface
-type MockPgConn struct {
-	mock.Mock
-}
-
-func (m *MockPgConn) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
+func (m *MockPgDb) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
 	return m.Called(ctx, sql, args).Get(0).(pgx.Row)
 }
 
-func (m *MockPgConn) Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error) {
+func (m *MockPgDb) Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error) {
 	args := m.Called(ctx, sql, arguments)
 	return args.Get(0).(pgconn.CommandTag), args.Error(1)
 }
 
-func (m *MockPgConn) Begin(ctx context.Context) (pgx.Tx, error) {
+func (m *MockPgDb) Begin(ctx context.Context) (pgx.Tx, error) {
 	args := m.Called(ctx)
 	return args.Get(0).(pgx.Tx), args.Error(1)
-}
-
-func (m *MockPgConn) Release() {
-	m.Called()
 }
 
 // MockTx is a mock implementation of the pgx.Tx interface
@@ -117,45 +103,39 @@ func TestUpdateGroupPermissions(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	t.Run("success", func(t *testing.T) {
-		mockPool := new(MockPgPool)
-		mockConn := new(MockPgConn)
+		mockDb := new(MockPgDb)
 		mockTx := new(MockTx)
 		mockRow := new(MockRow)
 		mockTag := pgconn.NewCommandTag("INSERT 0 1")
 
-		manager := NewPostgresPolicyManager(mockPool, logger)
+		manager := NewPostgresPolicyManager(mockDb, logger)
 
-		mockPool.On("Acquire", ctx).Return(mockConn, nil)
-		mockConn.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
+		mockDb.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
 		mockRow.On("Scan", mock.Anything).Run(func(args mock.Arguments) {
 			*(args[0].([]any)[0].(*int)) = 1
 		}).Return(nil)
-		mockConn.On("Begin", ctx).Return(mockTx, nil)
+		mockDb.On("Begin", ctx).Return(mockTx, nil)
 		mockTx.On("Exec", ctx, mock.Anything, mock.Anything).Return(mockTag, nil)
 		mockTx.On("Commit", ctx).Return(nil)
 		mockTx.On("Rollback", ctx).Return(nil)
-		mockConn.On("Release").Return()
 
 		err := manager.UpdateGroupPermissions(ctx, 1, []int{1, 2, 3})
 
 		assert.NoError(t, err)
 
-		mockConn.AssertExpectations(t)
+		mockDb.AssertExpectations(t)
 		mockTx.AssertExpectations(t)
 		mockRow.AssertExpectations(t)
 	})
 
 	t.Run("group not found", func(t *testing.T) {
-		mockPool := new(MockPgPool)
-		mockConn := new(MockPgConn)
+		mockDb := new(MockPgDb)
 		mockRow := new(MockRow)
 
-		manager := NewPostgresPolicyManager(mockPool, logger)
+		manager := NewPostgresPolicyManager(mockDb, logger)
 
-		mockPool.On("Acquire", ctx).Return(mockConn, nil)
-		mockConn.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
+		mockDb.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
 		mockRow.On("Scan", mock.Anything).Return(pgx.ErrNoRows)
-		mockConn.On("Release").Return()
 
 		exp := store.NewGroupNotFoundError()
 		act := &store.PolicyStoreError{}
@@ -164,40 +144,18 @@ func TestUpdateGroupPermissions(t *testing.T) {
 		assert.ErrorAs(t, err, &act)
 		assert.Equal(t, exp, act)
 
-		mockPool.AssertExpectations(t)
-		mockConn.AssertExpectations(t)
+		mockDb.AssertExpectations(t)
 		mockRow.AssertExpectations(t)
 	})
 
-	t.Run("database error on acquire", func(t *testing.T) {
-		mockPool := new(MockPgPool)
-		mockConn := new(MockPgConn)
-
-		manager := NewPostgresPolicyManager(mockPool, logger)
-
-		mockPool.On("Acquire", ctx).Return(mockConn, errors.New("db error"))
-
-		err := manager.UpdateGroupPermissions(ctx, 1, []int{1, 2, 3})
-		exp := store.NewDataBaseError()
-		act := &store.PolicyStoreError{}
-
-		assert.ErrorAs(t, err, &act)
-		assert.Equal(t, exp, act)
-
-		mockPool.AssertExpectations(t)
-	})
-
 	t.Run("database error on query row", func(t *testing.T) {
-		mockPool := new(MockPgPool)
-		mockConn := new(MockPgConn)
+		mockDb := new(MockPgDb)
 		mockRow := new(MockRow)
 
-		manager := NewPostgresPolicyManager(mockPool, logger)
+		manager := NewPostgresPolicyManager(mockDb, logger)
 
-		mockPool.On("Acquire", ctx).Return(mockConn, nil)
-		mockConn.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
+		mockDb.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
 		mockRow.On("Scan", mock.Anything).Return(errors.New("db error"))
-		mockConn.On("Release").Return()
 
 		err := manager.UpdateGroupPermissions(ctx, 1, []int{1, 2, 3})
 		exp := store.NewDataBaseError()
@@ -206,26 +164,22 @@ func TestUpdateGroupPermissions(t *testing.T) {
 		assert.ErrorAs(t, err, &act)
 		assert.Equal(t, exp, act)
 
-		mockPool.AssertExpectations(t)
-		mockConn.AssertExpectations(t)
+		mockDb.AssertExpectations(t)
 		mockRow.AssertExpectations(t)
 	})
 
 	t.Run("database error on begin transaction", func(t *testing.T) {
-		mockPool := new(MockPgPool)
-		mockConn := new(MockPgConn)
+		mockDb := new(MockPgDb)
 		mockRow := new(MockRow)
 		mockTx := new(MockTx)
 
-		manager := NewPostgresPolicyManager(mockPool, logger)
+		manager := NewPostgresPolicyManager(mockDb, logger)
 
-		mockPool.On("Acquire", ctx).Return(mockConn, nil)
-		mockConn.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
+		mockDb.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
 		mockRow.On("Scan", mock.Anything).Run(func(args mock.Arguments) {
 			*(args[0].([]any)[0].(*int)) = 1
 		}).Return(nil)
-		mockConn.On("Begin", ctx).Return(mockTx, errors.New("db error"))
-		mockConn.On("Release").Return()
+		mockDb.On("Begin", ctx).Return(mockTx, errors.New("db error"))
 
 		err := manager.UpdateGroupPermissions(ctx, 1, []int{1, 2, 3})
 		exp := store.NewDataBaseError()
@@ -234,29 +188,25 @@ func TestUpdateGroupPermissions(t *testing.T) {
 		assert.ErrorAs(t, err, &act)
 		assert.Equal(t, exp, act)
 
-		mockPool.AssertExpectations(t)
-		mockConn.AssertExpectations(t)
+		mockDb.AssertExpectations(t)
 		mockRow.AssertExpectations(t)
+		mockTx.AssertExpectations(t)
 	})
 
 	t.Run("database error on exec merge permissions", func(t *testing.T) {
-		mockPool := new(MockPgPool)
-		mockConn := new(MockPgConn)
+		mockDb := new(MockPgDb)
 		mockTx := new(MockTx)
 		mockRow := new(MockRow)
 		mockTag := pgconn.NewCommandTag("INSERT 0 1")
 
-		manager := NewPostgresPolicyManager(mockPool, logger)
-
-		mockPool.On("Acquire", ctx).Return(mockConn, nil)
-		mockConn.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
+		manager := NewPostgresPolicyManager(mockDb, logger)
+		mockDb.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
 		mockRow.On("Scan", mock.Anything).Run(func(args mock.Arguments) {
 			*(args[0].([]any)[0].(*int)) = 1
 		}).Return(nil)
-		mockConn.On("Begin", ctx).Return(mockTx, nil)
+		mockDb.On("Begin", ctx).Return(mockTx, nil)
 		mockTx.On("Exec", ctx, mock.Anything, mock.Anything).Return(mockTag, errors.New("db error"))
 		mockTx.On("Rollback", ctx).Return(nil)
-		mockConn.On("Release").Return()
 
 		err := manager.UpdateGroupPermissions(ctx, 1, []int{1, 2, 3})
 		exp := store.NewDataBaseError()
@@ -265,31 +215,27 @@ func TestUpdateGroupPermissions(t *testing.T) {
 		assert.ErrorAs(t, err, &act)
 		assert.Equal(t, exp, act)
 
-		mockPool.AssertExpectations(t)
-		mockConn.AssertExpectations(t)
+		mockDb.AssertExpectations(t)
 		mockTx.AssertExpectations(t)
 		mockRow.AssertExpectations(t)
 	})
 
 	t.Run("database error on exec update version", func(t *testing.T) {
-		mockPool := new(MockPgPool)
-		mockConn := new(MockPgConn)
+		mockDb := new(MockPgDb)
 		mockTx := new(MockTx)
 		mockRow := new(MockRow)
 		mockTag := pgconn.NewCommandTag("INSERT 0 1")
 
-		manager := NewPostgresPolicyManager(mockPool, logger)
+		manager := NewPostgresPolicyManager(mockDb, logger)
 
-		mockPool.On("Acquire", ctx).Return(mockConn, nil)
-		mockConn.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
+		mockDb.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
 		mockRow.On("Scan", mock.Anything).Run(func(args mock.Arguments) {
 			*(args[0].([]any)[0].(*int)) = 1
 		}).Return(nil)
-		mockConn.On("Begin", ctx).Return(mockTx, nil)
+		mockDb.On("Begin", ctx).Return(mockTx, nil)
 		mockTx.On("Exec", ctx, "UPDATE groups SET version = version + 1 WHERE id = $1 AND version = $2", []any{1, 1}).Return(mockTag, errors.New("db error"))
 		mockTx.On("Exec", ctx, mock.Anything, mock.Anything).Return(mockTag, nil)
 		mockTx.On("Rollback", ctx).Return(nil)
-		mockConn.On("Release").Return()
 
 		err := manager.UpdateGroupPermissions(ctx, 1, []int{1, 2, 3})
 		exp := store.NewDataBaseError()
@@ -298,30 +244,26 @@ func TestUpdateGroupPermissions(t *testing.T) {
 		assert.ErrorAs(t, err, &act)
 		assert.Equal(t, exp, act)
 
-		mockPool.AssertExpectations(t)
-		mockConn.AssertExpectations(t)
+		mockDb.AssertExpectations(t)
 		mockTx.AssertExpectations(t)
 		mockRow.AssertExpectations(t)
 	})
 
 	t.Run("concurrency error", func(t *testing.T) {
-		mockPool := new(MockPgPool)
-		mockConn := new(MockPgConn)
+		mockDb := new(MockPgDb)
 		mockTx := new(MockTx)
 		mockRow := new(MockRow)
 		mockTag := pgconn.NewCommandTag("INSERT 0 0")
 
-		manager := NewPostgresPolicyManager(mockPool, logger)
+		manager := NewPostgresPolicyManager(mockDb, logger)
 
-		mockPool.On("Acquire", ctx).Return(mockConn, nil)
-		mockConn.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
+		mockDb.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
 		mockRow.On("Scan", mock.Anything).Run(func(args mock.Arguments) {
 			*(args[0].([]any)[0].(*int)) = 1
 		}).Return(nil)
-		mockConn.On("Begin", ctx).Return(mockTx, nil)
+		mockDb.On("Begin", ctx).Return(mockTx, nil)
 		mockTx.On("Exec", ctx, mock.Anything, mock.Anything).Return(mockTag, nil)
 		mockTx.On("Rollback", ctx).Return(nil)
-		mockConn.On("Release").Return()
 
 		err := manager.UpdateGroupPermissions(ctx, 1, []int{1, 2, 3})
 		exp := store.NewConcurrencyError()
@@ -330,8 +272,8 @@ func TestUpdateGroupPermissions(t *testing.T) {
 		assert.ErrorAs(t, err, &act)
 		assert.Equal(t, exp, act)
 
-		mockPool.AssertExpectations(t)
-		mockConn.AssertExpectations(t)
+		mockDb.AssertExpectations(t)
+		mockDb.AssertExpectations(t)
 		mockTx.AssertExpectations(t)
 		mockRow.AssertExpectations(t)
 	})
