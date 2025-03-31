@@ -37,10 +37,10 @@ func TestPolicyStoreError_Error(t *testing.T) {
 		},
 		{
 			name:                "DuplicateGroupNameError",
-			err:                 NewDuplicateGroupNameError(),
-			expectedMsg:         string(duplicateGroupNameDescription),
-			expectedDescription: duplicateGroupNameDescription,
-			expectedCode:        DuplicateGroupName,
+			err:                 NewNameExistsError(),
+			expectedMsg:         string(nameAlreadyExistsDescription),
+			expectedDescription: nameAlreadyExistsDescription,
+			expectedCode:        NameAlreadyExist,
 		},
 		{
 			name:                "NoUserRecordsDeletedError",

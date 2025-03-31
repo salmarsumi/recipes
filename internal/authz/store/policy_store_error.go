@@ -6,7 +6,7 @@ const (
 	DefaultError ErrorCode = iota
 	Concurrency
 	GroupNotFound
-	DuplicateGroupName
+	NameAlreadyExist
 	NoUserRecordsDeleted
 	DatabaseError
 )
@@ -17,7 +17,7 @@ const (
 	defaultErrorDescription         = "An unknown failure has occurred"
 	concurrencyDescription          = "The operation failed due to a concurrency issue"
 	groupNotFoundDescription        = "The group was not found"
-	duplicateGroupNameDescription   = "The group name already exists"
+	nameAlreadyExistsDescription    = "The name already exists"
 	noUserRecordsDeletedDescription = "No user records were deleted"
 	databaseErrorDescription        = "An error occurred while interacting with the database"
 )
@@ -55,10 +55,10 @@ func NewGroupNotFoundError() *PolicyStoreError {
 	}
 }
 
-func NewDuplicateGroupNameError() *PolicyStoreError {
+func NewNameExistsError() *PolicyStoreError {
 	return &PolicyStoreError{
-		Code:        DuplicateGroupName,
-		Description: duplicateGroupNameDescription,
+		Code:        NameAlreadyExist,
+		Description: nameAlreadyExistsDescription,
 	}
 }
 
