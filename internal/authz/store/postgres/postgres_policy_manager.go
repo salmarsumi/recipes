@@ -103,13 +103,31 @@ func (manager *PostgresPolicyManager) CreateGroup(ctx context.Context, groupName
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
 			logger.Error("group name already exists")
-			return 0, store.NewDuplicateGroupNameError()
+			return 0, store.NewNameExistsError()
 		}
 
 		logger.Error("failed to create group", "error", err)
 		return 0, store.NewDataBaseError()
 	}
 	logger.Info("group created successfully", "group_id", id)
+	return id, nil
+}
+
+func (manager *PostgresPolicyManager) CreatePermission(ctx context.Context, permissionName string) (int, error) {
+	logger := manager.logger.With("permission_name", permissionName)
+	var id int
+	err := manager.db.QueryRow(ctx, "INSERT INTO permissions (name, version) VALUES ($1, 1) RETURNING id", permissionName).Scan(&id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
+			logger.Error("permission name already exists")
+			return 0, store.NewNameExistsError()
+		}
+
+		logger.Error("failed to create permission", "error", err)
+		return 0, store.NewDataBaseError()
+	}
+	logger.Info("permission created successfully", "permission_id", id)
 	return id, nil
 }
 
