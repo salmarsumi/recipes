@@ -51,12 +51,7 @@ func (manager *PostgresPolicyManager) UpdateGroupPermissions(ctx context.Context
 		logger.Error("failed to start transaction", "error", err)
 		return store.NewDataBaseError()
 	}
-	defer func() {
-		err := tx.Rollback(ctx)
-		if err != nil {
-			logger.Error("failed to rollback transaction", "error", err)
-		}
-	}()
+	defer rollback(tx, ctx, logger)
 
 	// merge the new permissions with the existing ones
 	_, err = tx.Exec(ctx, `
@@ -109,7 +104,7 @@ func (manager *PostgresPolicyManager) CreateGroup(ctx context.Context, groupName
 		logger.Error("failed to create group", "error", err)
 		return 0, store.NewDataBaseError()
 	}
-	logger.Info("group created successfully", "group_id", id)
+
 	return id, nil
 }
 
@@ -127,13 +122,78 @@ func (manager *PostgresPolicyManager) CreatePermission(ctx context.Context, perm
 		logger.Error("failed to create permission", "error", err)
 		return 0, store.NewDataBaseError()
 	}
-	logger.Info("permission created successfully", "permission_id", id)
+
 	return id, nil
 }
 
 // UpdateGroupUsers updates the users for the specified group.
 func (manager *PostgresPolicyManager) UpdateGroupUsers(ctx context.Context, groupId int, users []string) error {
-	//logger := manager.logger.With("group_id", groupId)
+	logger := manager.logger.With("group_id", groupId)
+
+	var version int
+	err := manager.db.QueryRow(ctx, "SELECT version FROM groups WHERE id = $1", groupId).Scan(&version)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			logger.Error("group not found")
+			return store.NewGroupNotFoundError()
+		}
+		logger.Error("failed to query group version", "error", err)
+		return store.NewDataBaseError()
+	}
+
+	// start a new transaction
+	tx, err := manager.db.Begin(ctx)
+	if err != nil {
+		logger.Error("failed to start transaction", "error", err)
+		return store.NewDataBaseError()
+	}
+	defer rollback(tx, ctx, logger)
+
+	// merge the new users with the existing ones
+	_, err = tx.Exec(ctx, `
+	WITH new_users AS (SELECT unnest($1::text[]) AS user_id)
+	MERGE INTO subjects sub
+	USING new_users nu
+	ON sub.group_id = $2 AND sub.id = nu.user_id
+	WHEN NOT MATCHED BY TARGET THEN
+		INSERT (group_id, id) VALUES ($2, nu.user_id)
+	WHEN NOT MATCHED BY SOURCE THEN
+		DELETE;
+	`, users, groupId)
+	if err != nil {
+		logger.Error("failed to merge group users", "error", err)
+		return store.NewDataBaseError()
+	}
+
+	// update the group version
+	tags, err := tx.Exec(ctx, "UPDATE groups SET version = version + 1 WHERE id = $1 AND version = $2", groupId, version)
+	if err != nil {
+		logger.Error("failed to update group version", "error", err)
+		return store.NewDataBaseError()
+	}
+	if tags.RowsAffected() == 0 {
+		logger.Error("failed to update group version due to concurrency issue")
+		return store.NewConcurrencyError()
+	}
+
+	err = tx.Commit(ctx)
+	if err != nil {
+		logger.Error("failed to commit transaction", "error", err)
+		return store.NewDataBaseError()
+	}
 
 	return nil
+}
+
+// 	UpdateUserGroups(ctx context.Context, userId TUserId, groups []TGroupId) error
+// 	DeleteGroup(ctx context.Context, groupId TGroupId) error
+// 	ChangeGroupName(ctx context.Context, groupId TGroupId, newGroupName string) error
+// 	DeleteUser(ctx context.Context, userId TUserId) error
+// 	ReadPolicy(ctx context.Context) (*authz.Policy, error)
+
+func rollback(tx pgx.Tx, ctx context.Context, logger *slog.Logger) {
+	err := tx.Rollback(ctx)
+	if err != nil && err != pgx.ErrTxClosed {
+		logger.Error("failed to rollback transaction", "error", err)
+	}
 }
