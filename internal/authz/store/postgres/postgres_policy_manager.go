@@ -36,13 +36,7 @@ func (manager *PostgresPolicyManager) UpdateGroupPermissions(ctx context.Context
 	var version int
 	err := manager.db.QueryRow(ctx, "SELECT version FROM groups WHERE id = $1", groupId).Scan(&version)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			logger.Error("group not found")
-			return store.NewGroupNotFoundError()
-		}
-
-		logger.Error("failed to query group version", "error", err)
-		return store.NewDataBaseError()
+		return versionError(err, logger)
 	}
 
 	// start a new transaction
@@ -108,6 +102,7 @@ func (manager *PostgresPolicyManager) CreateGroup(ctx context.Context, groupName
 	return id, nil
 }
 
+// CreatePermission creates a new permission.
 func (manager *PostgresPolicyManager) CreatePermission(ctx context.Context, permissionName string) (int, error) {
 	logger := manager.logger.With("permission_name", permissionName)
 	var id int
@@ -133,12 +128,7 @@ func (manager *PostgresPolicyManager) UpdateGroupUsers(ctx context.Context, grou
 	var version int
 	err := manager.db.QueryRow(ctx, "SELECT version FROM groups WHERE id = $1", groupId).Scan(&version)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			logger.Error("group not found")
-			return store.NewGroupNotFoundError()
-		}
-		logger.Error("failed to query group version", "error", err)
-		return store.NewDataBaseError()
+		return versionError(err, logger)
 	}
 
 	// start a new transaction
@@ -185,8 +175,48 @@ func (manager *PostgresPolicyManager) UpdateGroupUsers(ctx context.Context, grou
 	return nil
 }
 
-// 	UpdateUserGroups(ctx context.Context, userId TUserId, groups []TGroupId) error
-// 	DeleteGroup(ctx context.Context, groupId TGroupId) error
+// UpdateUserGroups updates the groups for the specified user.
+func (manager *PostgresPolicyManager) UpdateUserGroups(ctx context.Context, userId string, groups []int) error {
+	logger := manager.logger.With("user_id", userId)
+
+	// merge the new groups with the existing ones
+	_, err := manager.db.Exec(ctx, `
+	WITH new_groups AS (SELECT unnest($1::int[]) AS group_id)
+	MERGE INTO subjects sub
+	USING new_groups ng
+	ON sub.group_id = ng.group_id AND sub.id = $2
+	WHEN NOT MATCHED BY TARGET THEN
+		INSERT (id, group_id) VALUES ($2, ng.group_id)
+	WHEN NOT MATCHED BY SOURCE THEN
+		DELETE;
+	`, groups, userId)
+	if err != nil {
+		logger.Error("failed to merge user groups", "error", err)
+		return store.NewDataBaseError()
+	}
+
+	return nil
+}
+
+// DeleteGroup deletes the group with the specified id.
+func (manager *PostgresPolicyManager) DeleteGroup(ctx context.Context, groupId int) error {
+	logger := manager.logger.With("group_id", groupId)
+
+	var version int
+	err := manager.db.QueryRow(ctx, "SELECT version FROM groups WHERE id = $1", groupId).Scan(&version)
+	if err != nil {
+		return versionError(err, logger)
+	}
+
+	_, err = manager.db.Exec(ctx, "DELETE FROM groups WHERE id = $1", groupId)
+	if err != nil {
+		logger.Error("failed to delete group", "error", err)
+		return store.NewDataBaseError()
+	}
+
+	return nil
+}
+
 // 	ChangeGroupName(ctx context.Context, groupId TGroupId, newGroupName string) error
 // 	DeleteUser(ctx context.Context, userId TUserId) error
 // 	ReadPolicy(ctx context.Context) (*authz.Policy, error)
@@ -196,4 +226,13 @@ func rollback(tx pgx.Tx, ctx context.Context, logger *slog.Logger) {
 	if err != nil && err != pgx.ErrTxClosed {
 		logger.Error("failed to rollback transaction", "error", err)
 	}
+}
+
+func versionError(err error, logger *slog.Logger) error {
+	if err == pgx.ErrNoRows {
+		logger.Error("group not found")
+		return store.NewGroupNotFoundError()
+	}
+	logger.Error("failed to query group version", "error", err)
+	return store.NewDataBaseError()
 }
