@@ -447,3 +447,85 @@ func TestUpdateGroupUsers(t *testing.T) {
 		mockRow.AssertExpectations(t)
 	})
 }
+func TestUpdateUserGroups(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		mockDb, _, _, manager := setupMockDbAndManager()
+		mockTag := pgconn.NewCommandTag("MERGE 1")
+
+		mockDb.On("Exec", ctx, mock.Anything, []any{[]int{1, 2, 3}, "user1"}).Return(mockTag, nil)
+
+		err := manager.UpdateUserGroups(ctx, "user1", []int{1, 2, 3})
+		assert.NoError(t, err)
+
+		mockDb.AssertExpectations(t)
+	})
+
+	t.Run("database error on exec", func(t *testing.T) {
+		mockDb, _, _, manager := setupMockDbAndManager()
+
+		mockDb.On("Exec", ctx, mock.Anything, []any{[]int{1, 2, 3}, "user1"}).Return(pgconn.CommandTag{}, errors.New("db error"))
+
+		err := manager.UpdateUserGroups(ctx, "user1", []int{1, 2, 3})
+		assertPolicyStoreError(t, err, store.NewDataBaseError())
+
+		mockDb.AssertExpectations(t)
+	})
+}
+func TestDeleteGroup(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		mockDb, _, mockRow, manager := setupMockDbAndManager()
+		mockTag := pgconn.NewCommandTag("DELETE 1")
+
+		setupMockQueryRow(mockDb, mockRow, ctx, 1, 1)
+		mockDb.On("Exec", ctx, "DELETE FROM groups WHERE id = $1", []any{1}).Return(mockTag, nil)
+
+		err := manager.DeleteGroup(ctx, 1)
+		assert.NoError(t, err)
+
+		mockDb.AssertExpectations(t)
+		mockRow.AssertExpectations(t)
+	})
+
+	t.Run("group not found", func(t *testing.T) {
+		mockDb, _, mockRow, manager := setupMockDbAndManager()
+
+		mockDb.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
+		mockRow.On("Scan", mock.Anything).Return(pgx.ErrNoRows)
+
+		err := manager.DeleteGroup(ctx, 1)
+		assertPolicyStoreError(t, err, store.NewGroupNotFoundError())
+
+		mockDb.AssertExpectations(t)
+		mockRow.AssertExpectations(t)
+	})
+
+	t.Run("database error on query row", func(t *testing.T) {
+		mockDb, _, mockRow, manager := setupMockDbAndManager()
+
+		mockDb.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
+		mockRow.On("Scan", mock.Anything).Return(errors.New("db error"))
+
+		err := manager.DeleteGroup(ctx, 1)
+		assertPolicyStoreError(t, err, store.NewDataBaseError())
+
+		mockDb.AssertExpectations(t)
+		mockRow.AssertExpectations(t)
+	})
+
+	t.Run("database error on delete", func(t *testing.T) {
+		mockDb, _, mockRow, manager := setupMockDbAndManager()
+
+		setupMockQueryRow(mockDb, mockRow, ctx, 1, 1)
+		mockDb.On("Exec", ctx, "DELETE FROM groups WHERE id = $1", []any{1}).Return(pgconn.CommandTag{}, errors.New("db error"))
+
+		err := manager.DeleteGroup(ctx, 1)
+		assertPolicyStoreError(t, err, store.NewDataBaseError())
+
+		mockDb.AssertExpectations(t)
+		mockRow.AssertExpectations(t)
+	})
+}
