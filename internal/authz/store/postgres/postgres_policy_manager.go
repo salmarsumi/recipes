@@ -244,7 +244,24 @@ func (manager *PostgresPolicyManager) ChangeGroupName(ctx context.Context, group
 	return nil
 }
 
-// 	DeleteUser(ctx context.Context, userId TUserId) error
+// DeleteUser deletes the user with the specified id.
+func (manager *PostgresPolicyManager) DeleteUser(ctx context.Context, userId string) error {
+	logger := manager.logger.With("user_id", userId)
+
+	// delete the user from the database
+	tag, err := manager.db.Exec(ctx, "DELETE FROM subjects WHERE id = $1", userId)
+	if err != nil {
+		logger.Error("failed to delete user", "error", err)
+		return store.NewDataBaseError()
+	}
+	if tag.RowsAffected() == 0 {
+		logger.Error("no user records found for deletion")
+		return store.NewNoUserRecordsDeletedError()
+	}
+
+	return nil
+}
+
 // 	ReadPolicy(ctx context.Context) (*authz.Policy, error)
 
 func rollback(tx pgx.Tx, ctx context.Context, logger *slog.Logger) {

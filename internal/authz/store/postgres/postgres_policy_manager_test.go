@@ -613,3 +613,41 @@ func TestChangeGroupName(t *testing.T) {
 		mockRow.AssertExpectations(t)
 	})
 }
+func TestDeleteUser(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		mockDb, _, _, manager := setupMockDbAndManager()
+		mockTag := pgconn.NewCommandTag("DELETE 1")
+
+		mockDb.On("Exec", ctx, "DELETE FROM subjects WHERE id = $1", []any{"user1"}).Return(mockTag, nil)
+
+		err := manager.DeleteUser(ctx, "user1")
+		assert.NoError(t, err)
+
+		mockDb.AssertExpectations(t)
+	})
+
+	t.Run("database error", func(t *testing.T) {
+		mockDb, _, _, manager := setupMockDbAndManager()
+
+		mockDb.On("Exec", ctx, "DELETE FROM subjects WHERE id = $1", []any{"user1"}).Return(pgconn.CommandTag{}, errors.New("db error"))
+
+		err := manager.DeleteUser(ctx, "user1")
+		assertPolicyStoreError(t, err, store.NewDataBaseError())
+
+		mockDb.AssertExpectations(t)
+	})
+
+	t.Run("no user records found for deletion", func(t *testing.T) {
+		mockDb, _, _, manager := setupMockDbAndManager()
+		mockTag := pgconn.NewCommandTag("DELETE 0")
+
+		mockDb.On("Exec", ctx, "DELETE FROM subjects WHERE id = $1", []any{"user1"}).Return(mockTag, nil)
+
+		err := manager.DeleteUser(ctx, "user1")
+		assertPolicyStoreError(t, err, store.NewNoUserRecordsDeletedError())
+
+		mockDb.AssertExpectations(t)
+	})
+}
