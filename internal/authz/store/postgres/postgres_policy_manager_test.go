@@ -528,4 +528,88 @@ func TestDeleteGroup(t *testing.T) {
 		mockDb.AssertExpectations(t)
 		mockRow.AssertExpectations(t)
 	})
+
+	t.Run("concurrency error", func(t *testing.T) {
+		mockDb, _, mockRow, manager := setupMockDbAndManager()
+		mockTag := pgconn.NewCommandTag("DELETE 0")
+
+		setupMockQueryRow(mockDb, mockRow, ctx, 1, 1)
+		mockDb.On("Exec", ctx, "DELETE FROM groups WHERE id = $1 AND version = $2", []any{1, 1}).Return(mockTag, nil)
+
+		err := manager.DeleteGroup(ctx, 1)
+		assertPolicyStoreError(t, err, store.NewConcurrencyError())
+
+		mockDb.AssertExpectations(t)
+		mockRow.AssertExpectations(t)
+	})
+}
+func TestChangeGroupName(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		mockDb, _, mockRow, manager := setupMockDbAndManager()
+		mockTag := pgconn.NewCommandTag("UPDATE 1")
+
+		setupMockQueryRow(mockDb, mockRow, ctx, 1, 1)
+		mockDb.On("Exec", ctx, "UPDATE groups SET name = $1, version = version + 1 WHERE id = $2 AND version = $3", []any{"new-group-name", 1, 1}).Return(mockTag, nil)
+
+		err := manager.ChangeGroupName(ctx, 1, "new-group-name")
+		assert.NoError(t, err)
+
+		mockDb.AssertExpectations(t)
+		mockRow.AssertExpectations(t)
+	})
+
+	t.Run("group not found", func(t *testing.T) {
+		mockDb, _, mockRow, manager := setupMockDbAndManager()
+
+		mockDb.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
+		mockRow.On("Scan", mock.Anything).Return(pgx.ErrNoRows)
+
+		err := manager.ChangeGroupName(ctx, 1, "new-group-name")
+		assertPolicyStoreError(t, err, store.NewGroupNotFoundError())
+
+		mockDb.AssertExpectations(t)
+		mockRow.AssertExpectations(t)
+	})
+
+	t.Run("database error on query row", func(t *testing.T) {
+		mockDb, _, mockRow, manager := setupMockDbAndManager()
+
+		mockDb.On("QueryRow", ctx, "SELECT version FROM groups WHERE id = $1", []any{1}).Return(mockRow)
+		mockRow.On("Scan", mock.Anything).Return(errors.New("db error"))
+
+		err := manager.ChangeGroupName(ctx, 1, "new-group-name")
+		assertPolicyStoreError(t, err, store.NewDataBaseError())
+
+		mockDb.AssertExpectations(t)
+		mockRow.AssertExpectations(t)
+	})
+
+	t.Run("database error on exec update", func(t *testing.T) {
+		mockDb, _, mockRow, manager := setupMockDbAndManager()
+
+		setupMockQueryRow(mockDb, mockRow, ctx, 1, 1)
+		mockDb.On("Exec", ctx, "UPDATE groups SET name = $1, version = version + 1 WHERE id = $2 AND version = $3", []any{"new-group-name", 1, 1}).Return(pgconn.CommandTag{}, errors.New("db error"))
+
+		err := manager.ChangeGroupName(ctx, 1, "new-group-name")
+		assertPolicyStoreError(t, err, store.NewDataBaseError())
+
+		mockDb.AssertExpectations(t)
+		mockRow.AssertExpectations(t)
+	})
+
+	t.Run("concurrency error", func(t *testing.T) {
+		mockDb, _, mockRow, manager := setupMockDbAndManager()
+		mockTag := pgconn.NewCommandTag("UPDATE 0")
+
+		setupMockQueryRow(mockDb, mockRow, ctx, 1, 1)
+		mockDb.On("Exec", ctx, "UPDATE groups SET name = $1, version = version + 1 WHERE id = $2 AND version = $3", []any{"new-group-name", 1, 1}).Return(mockTag, nil)
+
+		err := manager.ChangeGroupName(ctx, 1, "new-group-name")
+		assertPolicyStoreError(t, err, store.NewConcurrencyError())
+
+		mockDb.AssertExpectations(t)
+		mockRow.AssertExpectations(t)
+	})
 }

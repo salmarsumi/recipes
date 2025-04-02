@@ -208,16 +208,42 @@ func (manager *PostgresPolicyManager) DeleteGroup(ctx context.Context, groupId i
 		return versionError(err, logger)
 	}
 
-	_, err = manager.db.Exec(ctx, "DELETE FROM groups WHERE id = $1", groupId)
+	tag, err := manager.db.Exec(ctx, "DELETE FROM groups WHERE id = $1 AND version = $2", groupId, version)
 	if err != nil {
 		logger.Error("failed to delete group", "error", err)
 		return store.NewDataBaseError()
+	}
+	if tag.RowsAffected() == 0 {
+		logger.Error("failed to delete group due to concurrency issue")
+		return store.NewConcurrencyError()
 	}
 
 	return nil
 }
 
-// 	ChangeGroupName(ctx context.Context, groupId TGroupId, newGroupName string) error
+// ChangeGroupName changes the name of the group with the specified id.
+func (manager *PostgresPolicyManager) ChangeGroupName(ctx context.Context, groupId int, newGroupName string) error {
+	logger := manager.logger.With("group_id", groupId)
+
+	// get the current version of the group
+	var version int
+	err := manager.db.QueryRow(ctx, "SELECT version FROM groups WHERE id = $1", groupId).Scan(&version)
+	if err != nil {
+		return versionError(err, logger)
+	}
+	tag, err := manager.db.Exec(ctx, "UPDATE groups SET name = $1, version = version + 1 WHERE id = $2 AND version = $3", newGroupName, groupId, version)
+	if err != nil {
+		logger.Error("failed to update group name", "error", err)
+		return store.NewDataBaseError()
+	}
+	if tag.RowsAffected() == 0 {
+		logger.Error("failed to update group name due to concurrency issue")
+		return store.NewConcurrencyError()
+	}
+
+	return nil
+}
+
 // 	DeleteUser(ctx context.Context, userId TUserId) error
 // 	ReadPolicy(ctx context.Context) (*authz.Policy, error)
 
