@@ -481,7 +481,7 @@ func TestDeleteGroup(t *testing.T) {
 		mockTag := pgconn.NewCommandTag("DELETE 1")
 
 		setupMockQueryRow(mockDb, mockRow, ctx, 1, 1)
-		mockDb.On("Exec", ctx, "DELETE FROM groups WHERE id = $1", []any{1}).Return(mockTag, nil)
+		mockDb.On("Exec", ctx, "DELETE FROM groups WHERE id = $1 AND version = $2", []any{1, 1}).Return(mockTag, nil)
 
 		err := manager.DeleteGroup(ctx, 1)
 		assert.NoError(t, err)
@@ -520,7 +520,7 @@ func TestDeleteGroup(t *testing.T) {
 		mockDb, _, mockRow, manager := setupMockDbAndManager()
 
 		setupMockQueryRow(mockDb, mockRow, ctx, 1, 1)
-		mockDb.On("Exec", ctx, "DELETE FROM groups WHERE id = $1", []any{1}).Return(pgconn.CommandTag{}, errors.New("db error"))
+		mockDb.On("Exec", ctx, "DELETE FROM groups WHERE id = $1 AND version = $2", []any{1, 1}).Return(pgconn.CommandTag{}, errors.New("db error"))
 
 		err := manager.DeleteGroup(ctx, 1)
 		assertPolicyStoreError(t, err, store.NewDataBaseError())
