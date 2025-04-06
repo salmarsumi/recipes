@@ -24,15 +24,17 @@ type MockPgDb struct {
 func (m *MockPgDb) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
 	return m.Called(ctx, sql, args).Get(0).(pgx.Row)
 }
-
 func (m *MockPgDb) Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error) {
 	args := m.Called(ctx, sql, arguments)
 	return args.Get(0).(pgconn.CommandTag), args.Error(1)
 }
-
 func (m *MockPgDb) Begin(ctx context.Context) (pgx.Tx, error) {
 	args := m.Called(ctx)
 	return args.Get(0).(pgx.Tx), args.Error(1)
+}
+func (m *MockPgDb) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
+	args := m.Called(ctx, b)
+	return args.Get(0).(pgx.BatchResults)
 }
 
 // MockTx is a mock implementation of the pgx.Tx interface
@@ -44,43 +46,34 @@ func (m *MockTx) Begin(ctx context.Context) (pgx.Tx, error) {
 	args := m.Called(ctx)
 	return args.Get(0).(pgx.Tx), args.Error(1)
 }
-
 func (m *MockTx) Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error) {
 	args := m.Called(ctx, sql, arguments)
 	return args.Get(0).(pgconn.CommandTag), args.Error(1)
 }
-
 func (m *MockTx) Rollback(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
-
 func (m *MockTx) Commit(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
-
 func (m *MockTx) Conn() *pgx.Conn {
 	return m.Called().Get(0).(*pgx.Conn)
 }
-
 func (m *MockTx) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error) {
 	args := m.Called(ctx, tableName, columnNames, rowSrc)
 	return args.Get(0).(int64), args.Error(1)
 }
-
 func (m *MockTx) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
 	args := m.Called(ctx, b)
 	return args.Get(0).(pgx.BatchResults)
 }
-
 func (m *MockTx) LargeObjects() pgx.LargeObjects {
 	return m.Called().Get(0).(pgx.LargeObjects)
 }
-
 func (m *MockTx) Prepare(ctx context.Context, name, sql string) (*pgconn.StatementDescription, error) {
 	args := m.Called(ctx, name, sql)
 	return args.Get(0).(*pgconn.StatementDescription), args.Error(1)
 }
-
 func (m *MockTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 	arguments := m.Called(ctx, sql, args)
 	return arguments.Get(0).(pgx.Rows), arguments.Error(1)
@@ -97,6 +90,60 @@ type MockRow struct {
 func (m *MockRow) Scan(dest ...any) error {
 	args := m.Called(dest)
 	return args.Error(0)
+}
+
+// MockRows is a mock implementation of the pgx.Rows interface
+type MockRows struct {
+	mock.Mock
+}
+
+func (m *MockRows) Next() bool {
+	return m.Called().Bool(0)
+}
+func (m *MockRows) Scan(dest ...any) error {
+	args := m.Called(dest)
+	return args.Error(0)
+}
+func (m *MockRows) Err() error {
+	return m.Called().Error(0)
+}
+func (m *MockRows) Close() {
+	m.Called()
+}
+func (m *MockRows) CommandTag() pgconn.CommandTag {
+	return m.Called().Get(0).(pgconn.CommandTag)
+}
+func (m *MockRows) Conn() *pgx.Conn {
+	return m.Called().Get(0).(*pgx.Conn)
+}
+func (m *MockRows) FieldDescriptions() []pgconn.FieldDescription {
+	return m.Called().Get(0).([]pgconn.FieldDescription)
+}
+func (m *MockRows) Values() ([]any, error) {
+	return m.Called().Get(0).([]any), m.Called().Error(1)
+}
+func (m *MockRows) RawValues() [][]byte {
+	return m.Called().Get(0).([][]byte)
+}
+
+// MockBatchResults is a mock implementation of the pgx.BatchResults interface
+type MockBatchResults struct {
+	mock.Mock
+}
+
+func (m *MockBatchResults) QueryRow() pgx.Row {
+	return m.Called().Get(0).(pgx.Row)
+}
+func (m *MockBatchResults) Query() (pgx.Rows, error) {
+	args := m.Called()
+	return args.Get(0).(pgx.Rows), args.Error(1)
+}
+func (m *MockBatchResults) Exec() (pgconn.CommandTag, error) {
+	args := m.Called()
+	return args.Get(0).(pgconn.CommandTag), args.Error(1)
+}
+func (m *MockBatchResults) Close() error {
+	return m.Called().Error(0)
 }
 
 func setupMockDbAndManager() (*MockPgDb, *MockTx, *MockRow, *PostgresPolicyManager) {
@@ -649,5 +696,191 @@ func TestDeleteUser(t *testing.T) {
 		assertPolicyStoreError(t, err, store.NewNoUserRecordsDeletedError())
 
 		mockDb.AssertExpectations(t)
+	})
+}
+func TestReadPolicy(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		mockDb, _, _, manager := setupMockDbAndManager()
+		mockBatchResults := new(MockBatchResults)
+		mockRowsGroups := new(MockRows)
+		mockRowsPermissions := new(MockRows)
+
+		mockDb.On("SendBatch", ctx, mock.Anything).Return(mockBatchResults)
+		mockBatchResults.On("Query").Return(mockRowsGroups, nil).Once()
+		mockBatchResults.On("Query").Return(mockRowsPermissions, nil).Once()
+		mockBatchResults.On("Close").Return(nil)
+
+		// Mock group users query
+		mockRowsGroups.On("Next").Return(true).Once()
+		mockRowsGroups.On("Next").Return(false).Once()
+		mockRowsGroups.On("Scan", mock.Anything, mock.Anything).
+			Run(func(args mock.Arguments) {
+				*(args[0].([]any)[0].(*string)) = "group1"
+				*(args[0].([]any)[1].(*string)) = "user1"
+			}).Return(nil)
+		mockRowsGroups.On("Err").Return(nil)
+
+		// Mock permissions query
+		mockRowsPermissions.On("Next").Return(true).Once()
+		mockRowsPermissions.On("Next").Return(false).Once()
+		mockRowsPermissions.On("Scan", mock.Anything, mock.Anything).
+			Run(func(args mock.Arguments) {
+				*(args[0].([]any)[0].(*string)) = "permission1"
+				*(args[0].([]any)[1].(*string)) = "group1"
+			}).Return(nil)
+		mockRowsPermissions.On("Err").Return(nil)
+
+		policy, err := manager.ReadPolicy(ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, policy)
+		assert.Len(t, policy.Groups, 1)
+		assert.Len(t, policy.Permissions, 1)
+		assert.Equal(t, "group1", policy.Groups[0].Name)
+		assert.Equal(t, []string{"user1"}, policy.Groups[0].Users)
+		assert.Equal(t, "permission1", policy.Permissions[0].Name)
+		assert.Equal(t, []string{"group1"}, policy.Permissions[0].Groups)
+
+		mockDb.AssertExpectations(t)
+		mockBatchResults.AssertExpectations(t)
+		mockRowsGroups.AssertExpectations(t)
+		mockRowsPermissions.AssertExpectations(t)
+	})
+
+	t.Run("database error on group users query", func(t *testing.T) {
+		mockDb, _, _, manager := setupMockDbAndManager()
+		mockBatchResults := new(MockBatchResults)
+		mockRowsGroups := new(MockRows)
+
+		mockDb.On("SendBatch", ctx, mock.Anything).Return(mockBatchResults)
+		mockBatchResults.On("Query").Return(mockRowsGroups, errors.New("db error")).Once()
+		mockBatchResults.On("Close").Return(nil)
+
+		policy, err := manager.ReadPolicy(ctx)
+		assertPolicyStoreError(t, err, store.NewDataBaseError())
+		assert.Nil(t, policy)
+
+		mockDb.AssertExpectations(t)
+		mockBatchResults.AssertExpectations(t)
+	})
+
+	t.Run("error scanning group users", func(t *testing.T) {
+		mockDb, _, _, manager := setupMockDbAndManager()
+		mockBatchResults := new(MockBatchResults)
+		mockRowsGroups := new(MockRows)
+
+		mockDb.On("SendBatch", ctx, mock.Anything).Return(mockBatchResults)
+		mockBatchResults.On("Query").Return(mockRowsGroups, nil).Once()
+		mockBatchResults.On("Close").Return(nil)
+
+		mockRowsGroups.On("Next").Return(true).Once()
+		mockRowsGroups.On("Scan", mock.Anything, mock.Anything).Return(errors.New("scan error"))
+
+		policy, err := manager.ReadPolicy(ctx)
+		assertPolicyStoreError(t, err, store.NewDefaultError())
+		assert.Nil(t, policy)
+
+		mockDb.AssertExpectations(t)
+		mockBatchResults.AssertExpectations(t)
+		mockRowsGroups.AssertExpectations(t)
+	})
+
+	t.Run("error reading group users", func(t *testing.T) {
+		mockDb, _, _, manager := setupMockDbAndManager()
+		mockBatchResults := new(MockBatchResults)
+		mockRowsGroups := new(MockRows)
+
+		mockDb.On("SendBatch", ctx, mock.Anything).Return(mockBatchResults)
+		mockBatchResults.On("Query").Return(mockRowsGroups, nil).Once()
+		mockBatchResults.On("Close").Return(nil)
+
+		mockRowsGroups.On("Next").Return(false).Once()
+		mockRowsGroups.On("Err").Return(errors.New("read error"))
+
+		policy, err := manager.ReadPolicy(ctx)
+		assertPolicyStoreError(t, err, store.NewDefaultError())
+		assert.Nil(t, policy)
+
+		mockDb.AssertExpectations(t)
+		mockBatchResults.AssertExpectations(t)
+		mockRowsGroups.AssertExpectations(t)
+	})
+
+	t.Run("database error on permissions query", func(t *testing.T) {
+		mockDb, _, _, manager := setupMockDbAndManager()
+		mockBatchResults := new(MockBatchResults)
+		mockRowsGroups := new(MockRows)
+
+		mockDb.On("SendBatch", ctx, mock.Anything).Return(mockBatchResults)
+		mockBatchResults.On("Query").Return(mockRowsGroups, nil).Once()
+		mockBatchResults.On("Query").Return(mockRowsGroups, errors.New("db error")).Once()
+		mockBatchResults.On("Close").Return(nil)
+
+		mockRowsGroups.On("Next").Return(false).Once()
+		mockRowsGroups.On("Err").Return(nil)
+
+		policy, err := manager.ReadPolicy(ctx)
+		assertPolicyStoreError(t, err, store.NewDataBaseError())
+		assert.Nil(t, policy)
+
+		mockDb.AssertExpectations(t)
+		mockBatchResults.AssertExpectations(t)
+		mockRowsGroups.AssertExpectations(t)
+	})
+
+	t.Run("error scanning permissions", func(t *testing.T) {
+		mockDb, _, _, manager := setupMockDbAndManager()
+		mockBatchResults := new(MockBatchResults)
+		mockRowsGroups := new(MockRows)
+		mockRowsPermissions := new(MockRows)
+
+		mockDb.On("SendBatch", ctx, mock.Anything).Return(mockBatchResults)
+		mockBatchResults.On("Query").Return(mockRowsGroups, nil).Once()
+		mockBatchResults.On("Query").Return(mockRowsPermissions, nil).Once()
+		mockBatchResults.On("Close").Return(nil)
+
+		mockRowsGroups.On("Next").Return(false).Once()
+		mockRowsGroups.On("Err").Return(nil)
+
+		mockRowsPermissions.On("Next").Return(true).Once()
+		mockRowsPermissions.On("Scan", mock.Anything, mock.Anything).
+			Return(errors.New("scan error"))
+		//mockRowsPermissions.On("Err").Return(nil)
+
+		policy, err := manager.ReadPolicy(ctx)
+		assertPolicyStoreError(t, err, store.NewDefaultError())
+		assert.Nil(t, policy)
+
+		mockDb.AssertExpectations(t)
+		mockBatchResults.AssertExpectations(t)
+		mockRowsGroups.AssertExpectations(t)
+		mockRowsPermissions.AssertExpectations(t)
+	})
+
+	t.Run("error reading permissions", func(t *testing.T) {
+		mockDb, _, _, manager := setupMockDbAndManager()
+		mockBatchResults := new(MockBatchResults)
+		mockRowsGroups := new(MockRows)
+		mockRowsPermissions := new(MockRows)
+
+		mockDb.On("SendBatch", ctx, mock.Anything).Return(mockBatchResults)
+		mockBatchResults.On("Query").Return(mockRowsGroups, nil).Once()
+		mockBatchResults.On("Query").Return(mockRowsPermissions, nil).Once()
+		mockBatchResults.On("Close").Return(nil)
+
+		mockRowsGroups.On("Next").Return(false).Once()
+		mockRowsGroups.On("Err").Return(nil)
+		mockRowsPermissions.On("Next").Return(false).Once()
+		mockRowsPermissions.On("Err").Return(errors.New("read error"))
+
+		policy, err := manager.ReadPolicy(ctx)
+		assertPolicyStoreError(t, err, store.NewDefaultError())
+		assert.Nil(t, policy)
+
+		mockDb.AssertExpectations(t)
+		mockBatchResults.AssertExpectations(t)
+		mockRowsGroups.AssertExpectations(t)
+		mockRowsPermissions.AssertExpectations(t)
 	})
 }

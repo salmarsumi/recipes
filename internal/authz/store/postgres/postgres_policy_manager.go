@@ -4,18 +4,22 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
+	"slices"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/salmarsumi/recipes/internal/authz"
 	"github.com/salmarsumi/recipes/internal/authz/store"
 )
 
 // pgDb is an interface that represents a pool of Postgres connections.
 type pgDb interface {
-	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error)
 	Begin(ctx context.Context) (pgx.Tx, error)
+	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
 }
 
 // PostgresPolicyManager is a Postgres implementation of the PolicyManager interface.
@@ -31,7 +35,7 @@ func NewPostgresPolicyManager(db pgDb, logger *slog.Logger) *PostgresPolicyManag
 
 // UpdateGroupPermissions updates the permissions for the specified group.
 func (manager *PostgresPolicyManager) UpdateGroupPermissions(ctx context.Context, groupId int, permissions []int) error {
-	logger := manager.logger.With("group_id", groupId)
+	logger := manager.logger.With("group_id", groupId, "operation", "UpdateGroupPermissions")
 
 	var version int
 	err := manager.db.QueryRow(ctx, "SELECT version FROM groups WHERE id = $1", groupId).Scan(&version)
@@ -85,7 +89,7 @@ func (manager *PostgresPolicyManager) UpdateGroupPermissions(ctx context.Context
 
 // CreateGroup creates a new group.
 func (manager *PostgresPolicyManager) CreateGroup(ctx context.Context, groupName string) (int, error) {
-	logger := manager.logger.With("group_name", groupName)
+	logger := manager.logger.With("group_name", groupName, "operation", "CreateGroup")
 	var id int
 	err := manager.db.QueryRow(ctx, "INSERT INTO groups (name, version) VALUES ($1, 1) RETURNING id", groupName).Scan(&id)
 	if err != nil {
@@ -104,7 +108,7 @@ func (manager *PostgresPolicyManager) CreateGroup(ctx context.Context, groupName
 
 // CreatePermission creates a new permission.
 func (manager *PostgresPolicyManager) CreatePermission(ctx context.Context, permissionName string) (int, error) {
-	logger := manager.logger.With("permission_name", permissionName)
+	logger := manager.logger.With("permission_name", permissionName, "operation", "CreatePermission")
 	var id int
 	err := manager.db.QueryRow(ctx, "INSERT INTO permissions (name, version) VALUES ($1, 1) RETURNING id", permissionName).Scan(&id)
 	if err != nil {
@@ -123,7 +127,7 @@ func (manager *PostgresPolicyManager) CreatePermission(ctx context.Context, perm
 
 // UpdateGroupUsers updates the users for the specified group.
 func (manager *PostgresPolicyManager) UpdateGroupUsers(ctx context.Context, groupId int, users []string) error {
-	logger := manager.logger.With("group_id", groupId)
+	logger := manager.logger.With("group_id", groupId, "operation", "UpdateGroupUsers")
 
 	var version int
 	err := manager.db.QueryRow(ctx, "SELECT version FROM groups WHERE id = $1", groupId).Scan(&version)
@@ -177,7 +181,7 @@ func (manager *PostgresPolicyManager) UpdateGroupUsers(ctx context.Context, grou
 
 // UpdateUserGroups updates the groups for the specified user.
 func (manager *PostgresPolicyManager) UpdateUserGroups(ctx context.Context, userId string, groups []int) error {
-	logger := manager.logger.With("user_id", userId)
+	logger := manager.logger.With("user_id", userId, "operation", "UpdateUserGroups")
 
 	// merge the new groups with the existing ones
 	_, err := manager.db.Exec(ctx, `
@@ -200,7 +204,7 @@ func (manager *PostgresPolicyManager) UpdateUserGroups(ctx context.Context, user
 
 // DeleteGroup deletes the group with the specified id.
 func (manager *PostgresPolicyManager) DeleteGroup(ctx context.Context, groupId int) error {
-	logger := manager.logger.With("group_id", groupId)
+	logger := manager.logger.With("group_id", groupId, "operation", "DeleteGroup")
 
 	var version int
 	err := manager.db.QueryRow(ctx, "SELECT version FROM groups WHERE id = $1", groupId).Scan(&version)
@@ -223,7 +227,7 @@ func (manager *PostgresPolicyManager) DeleteGroup(ctx context.Context, groupId i
 
 // ChangeGroupName changes the name of the group with the specified id.
 func (manager *PostgresPolicyManager) ChangeGroupName(ctx context.Context, groupId int, newGroupName string) error {
-	logger := manager.logger.With("group_id", groupId)
+	logger := manager.logger.With("group_id", groupId, "operation", "ChangeGroupName")
 
 	// get the current version of the group
 	var version int
@@ -246,7 +250,7 @@ func (manager *PostgresPolicyManager) ChangeGroupName(ctx context.Context, group
 
 // DeleteUser deletes the user with the specified id.
 func (manager *PostgresPolicyManager) DeleteUser(ctx context.Context, userId string) error {
-	logger := manager.logger.With("user_id", userId)
+	logger := manager.logger.With("user_id", userId, "operation", "DeleteUser")
 
 	// delete the user from the database
 	tag, err := manager.db.Exec(ctx, "DELETE FROM subjects WHERE id = $1", userId)
@@ -262,7 +266,86 @@ func (manager *PostgresPolicyManager) DeleteUser(ctx context.Context, userId str
 	return nil
 }
 
-// 	ReadPolicy(ctx context.Context) (*authz.Policy, error)
+func (manager *PostgresPolicyManager) ReadPolicy(ctx context.Context) (*authz.Policy, error) {
+	logger := manager.logger.With("operation", "ReadPolicy")
+
+	batch := pgx.Batch{}
+	batch.Queue("SELECT g.name , s.id FROM groups g LEFT JOIN subjects s on g.id = s.group_id;")
+	batch.Queue(`
+	SELECT p.name, g.name AS group_name 
+	FROM permissions p 
+	LEFT JOIN group_permissions gp ON p.id = gp.permission_id 
+	LEFT JOIN groups g ON g.id = gp.group_id;
+	`)
+
+	br := manager.db.SendBatch(ctx, &batch)
+	defer func() {
+		err := br.Close()
+		if err != nil {
+			logger.Error("failed to close batch results", "error", err)
+		}
+	}()
+
+	// group users
+	rows, err := br.Query()
+	if err != nil {
+		logger.Error("failed to query group users", "error", err)
+		return nil, store.NewDataBaseError()
+	}
+
+	groups := make(map[string]authz.Group)
+	var groupName, userId string
+	for rows.Next() {
+		err = rows.Scan(&groupName, &userId)
+		if err != nil {
+			logger.Error("failed to scan group users", "error", err)
+			return nil, store.NewDefaultError()
+		}
+
+		if group, ok := groups[groupName]; ok {
+			group.Users = append(group.Users, userId)
+		} else {
+			groups[groupName] = authz.Group{Name: groupName, Users: []string{userId}}
+		}
+	}
+
+	if rows.Err() != nil {
+		logger.Error("failed to read group users", "error", rows.Err())
+		return nil, store.NewDefaultError()
+	}
+
+	// permissions
+	rows, err = br.Query()
+	if err != nil {
+		logger.Error("failed to query permissions", "error", err)
+		return nil, store.NewDataBaseError()
+	}
+
+	permissions := make(map[string]authz.Permission)
+	var permissionName string
+	for rows.Next() {
+		err = rows.Scan(&permissionName, &groupName)
+		if err != nil {
+			logger.Error("failed to permission groups", "error", err)
+			return nil, store.NewDefaultError()
+		}
+
+		if permission, ok := permissions[permissionName]; ok {
+			permission.Groups = append(permission.Groups, groupName)
+		} else {
+			permissions[permissionName] = authz.Permission{Name: permissionName, Groups: []string{groupName}}
+		}
+	}
+
+	if rows.Err() != nil {
+		logger.Error("failed to read permission groups", "error", rows.Err())
+		return nil, store.NewDefaultError()
+	}
+
+	policy := authz.NewPolicy(slices.Collect(maps.Values(permissions)), slices.Collect(maps.Values(groups)))
+
+	return policy, nil
+}
 
 func rollback(tx pgx.Tx, ctx context.Context, logger *slog.Logger) {
 	err := tx.Rollback(ctx)
