@@ -59,7 +59,7 @@ func (manager *PostgresPolicyManager) UpdateGroupPermissions(ctx context.Context
 	ON gp.group_id = $2 AND gp.permission_id = np.permission_id
 	WHEN NOT MATCHED BY TARGET THEN
 		INSERT (group_id, permission_id) VALUES ($2, np.permission_id)
-	WHEN NOT MATCHED BY SOURCE THEN
+	WHEN NOT MATCHED BY SOURCE AND gp.group_id = $2 THEN
 		DELETE;
 	`, permissions, groupId)
 	if err != nil {
@@ -151,7 +151,7 @@ func (manager *PostgresPolicyManager) UpdateGroupUsers(ctx context.Context, grou
 	ON sub.group_id = $2 AND sub.id = nu.user_id
 	WHEN NOT MATCHED BY TARGET THEN
 		INSERT (group_id, id) VALUES ($2, nu.user_id)
-	WHEN NOT MATCHED BY SOURCE THEN
+	WHEN NOT MATCHED BY SOURCE AND sub.group_id = $2 THEN
 		DELETE;
 	`, users, groupId)
 	if err != nil {
@@ -191,7 +191,7 @@ func (manager *PostgresPolicyManager) UpdateUserGroups(ctx context.Context, user
 	ON sub.group_id = ng.group_id AND sub.id = $2
 	WHEN NOT MATCHED BY TARGET THEN
 		INSERT (id, group_id) VALUES ($2, ng.group_id)
-	WHEN NOT MATCHED BY SOURCE THEN
+	WHEN NOT MATCHED BY SOURCE AND sub.id = $2 THEN
 		DELETE;
 	`, groups, userId)
 	if err != nil {
