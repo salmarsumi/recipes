@@ -1,19 +1,19 @@
 -- Create table for Permission
-CREATE TABLE permissions (
+CREATE TABLE IF Not EXISTS permissions (
     id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name VARCHAR(255) NOT NULL UNIQUE,
     version INT
 );
 
 -- Create table for Group
-CREATE TABLE groups (
+CREATE TABLE IF Not EXISTS groups (
     id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name VARCHAR(255) NOT NULL UNIQUE,
     version INT
 );
 
 -- Create table for Subject
-CREATE TABLE subjects (
+CREATE TABLE IF Not EXISTS subjects (
     id VARCHAR(255),
     group_id INT,
     PRIMARY KEY (id, group_id),
@@ -21,7 +21,7 @@ CREATE TABLE subjects (
 );
 
 -- Create table for Group Permission
-CREATE TABLE group_permissions (
+CREATE TABLE IF Not EXISTS group_permissions (
     group_id INT,
     permission_id INT,
     PRIMARY KEY (group_id, permission_id),
