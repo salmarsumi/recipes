@@ -771,13 +771,14 @@ type PostgresPolicyManagerIntegrationTestSuite struct {
 }
 
 func TestPostgresPolicyManagerIntegrationTestSuite(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
 	suite.Run(t, new(PostgresPolicyManagerIntegrationTestSuite))
 }
 
 func (suite *PostgresPolicyManagerIntegrationTestSuite) SetupSuite() {
-	if testing.Short() {
-		suite.T().Skip("Skipping integration test in short mode")
-	}
 	suite.ctx = context.Background()
 	var err error
 	suite.pgContainer, err = CreatePostgresContainer(suite.ctx, "authz", path.Join("..", "..", "..", "..", "sql", "authz_postgres.sql"))
@@ -795,9 +796,6 @@ func (suite *PostgresPolicyManagerIntegrationTestSuite) SetupSuite() {
 }
 
 func (suite *PostgresPolicyManagerIntegrationTestSuite) TearDownSuite() {
-	if testing.Short() {
-		suite.T().Skip("Skipping integration test in short mode")
-	}
 	if err := suite.connection.Close(suite.ctx); err != nil {
 		suite.T().Errorf("Failed to close Postgres connection: %v", err)
 	}
@@ -808,10 +806,6 @@ func (suite *PostgresPolicyManagerIntegrationTestSuite) TearDownSuite() {
 
 func (suite *PostgresPolicyManagerIntegrationTestSuite) TestUpdateGroupPermissions_Integration() {
 	t := suite.T()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
 	db := suite.connection
 	manager := suite.manager
 
