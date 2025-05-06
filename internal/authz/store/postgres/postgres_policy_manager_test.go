@@ -760,7 +760,7 @@ func TestReadPolicy(t *testing.T) {
 }
 
 // Integration test for PostgresPolicyManager
-// This test suite requires a running Postgres instance and should be run with the `-tags integration` flag.
+// This test suite requires a running docker environment and should be run with the `-run Integration` flag.
 
 type PostgresPolicyManagerIntegrationTestSuite struct {
 	suite.Suite
@@ -819,13 +819,13 @@ func (suite *PostgresPolicyManagerIntegrationTestSuite) TestUpdateGroupPermissio
 	assert.NoError(t, err)
 
 	// Verify the results
-	var inserted int
+	var affected int
 	db.QueryRow(suite.ctx,
 		"SELECT COUNT(*) FROM group_permissions WHERE group_id = $1 AND permission_id = $2",
 		groupId,
-		permissionId).Scan(&inserted)
+		permissionId).Scan(&affected)
 
-	assert.Equal(t, len(permissions), inserted)
+	assert.Equal(t, len(permissions), affected)
 }
 
 // Helper functions for test setup and data generation
