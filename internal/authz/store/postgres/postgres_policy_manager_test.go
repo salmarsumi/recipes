@@ -828,6 +828,48 @@ func (suite *PostgresPolicyManagerIntegrationTestSuite) TestUpdateGroupPermissio
 	assert.Equal(t, len(permissions), affected)
 }
 
+func (suit *PostgresPolicyManagerIntegrationTestSuite) TestCreateGroup_Integration() {
+	t := suit.T()
+	db := suit.connection
+	manager := suit.manager
+	groupName := uuid.NewString()
+
+	// Run the function
+	id, err := manager.CreateGroup(suit.ctx, groupName)
+	assert.NoError(t, err)
+
+	// Verify the results
+	var version int
+	var name string
+	err = db.QueryRow(suit.ctx,
+		"SELECT name, version FROM groups WHERE id = $1",
+		id).Scan(&name, &version)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, version)
+	assert.Equal(t, groupName, name)
+}
+
+func (suit *PostgresPolicyManagerIntegrationTestSuite) TestCreatePermission_Integration() {
+	t := suit.T()
+	db := suit.connection
+	manager := suit.manager
+	permissionName := uuid.NewString()
+
+	// Run the function
+	id, err := manager.CreatePermission(suit.ctx, permissionName)
+	assert.NoError(t, err)
+
+	// Verify results
+	var version int
+	var name string
+	err = db.QueryRow(suit.ctx,
+		"SELECT name, version FROM permissions WHERE id = $1",
+		id).Scan(&name, &version)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, version)
+	assert.Equal(t, permissionName, name)
+}
+
 // Helper functions for test setup and data generation
 
 func addTestGroup(t *testing.T, ctx context.Context, db *pgx.Conn) (int, string) {
