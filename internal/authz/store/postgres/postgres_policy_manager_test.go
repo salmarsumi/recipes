@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path"
 	"testing"
 
@@ -13,6 +14,8 @@ import (
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/salmarsumi/recipes/internal/authz/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -593,7 +596,7 @@ func TestReadPolicy(t *testing.T) {
 		mockRowsGroups.On("Scan", mock.Anything, mock.Anything).
 			Run(func(args mock.Arguments) {
 				*(args[0].([]any)[0].(*string)) = "group1"
-				*(args[0].([]any)[1].(*string)) = "user1"
+				*(args[0].([]any)[1].(*pgtype.Text)) = pgtype.Text{String: "user1", Valid: true}
 			}).Return(nil)
 		mockRowsGroups.On("Err").Return(nil)
 
@@ -603,7 +606,7 @@ func TestReadPolicy(t *testing.T) {
 		mockRowsPermissions.On("Scan", mock.Anything, mock.Anything).
 			Run(func(args mock.Arguments) {
 				*(args[0].([]any)[0].(*string)) = "permission1"
-				*(args[0].([]any)[1].(*string)) = "group1"
+				*(args[0].([]any)[1].(*pgtype.Text)) = pgtype.Text{String: "group1", Valid: true}
 			}).Return(nil)
 		mockRowsPermissions.On("Err").Return(nil)
 
@@ -766,7 +769,7 @@ type PostgresPolicyManagerIntegrationTestSuite struct {
 	suite.Suite
 	pgContainer *PostgresContainer
 	manager     *PostgresPolicyManager
-	connection  *pgx.Conn
+	db          *pgxpool.Pool
 	ctx         context.Context
 }
 
@@ -786,19 +789,17 @@ func (suite *PostgresPolicyManagerIntegrationTestSuite) SetupSuite() {
 		suite.T().Fatalf("Failed to run Postgres container: %v", err)
 	}
 
-	suite.connection, err = pgx.Connect(suite.ctx, suite.pgContainer.ConnectionString)
+	suite.db, err = pgxpool.New(suite.ctx, suite.pgContainer.ConnectionString)
 	if err != nil {
 		suite.T().Fatalf("Failed to connect to Postgres: %v", err)
 	}
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	suite.manager = NewPostgresPolicyManager(suite.connection, logger)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil)) //slog.New(slog.NewTextHandler(io.Discard, nil))
+	suite.manager = NewPostgresPolicyManager(suite.db, logger)
 }
 
 func (suite *PostgresPolicyManagerIntegrationTestSuite) TearDownSuite() {
-	if err := suite.connection.Close(suite.ctx); err != nil {
-		suite.T().Errorf("Failed to close Postgres connection: %v", err)
-	}
+	suite.db.Close()
 	if err := suite.pgContainer.Terminate(suite.ctx); err != nil {
 		suite.T().Fatalf("Failed to terminate Postgres container: %v", err)
 	}
@@ -806,7 +807,7 @@ func (suite *PostgresPolicyManagerIntegrationTestSuite) TearDownSuite() {
 
 func (suite *PostgresPolicyManagerIntegrationTestSuite) TestUpdateGroupPermissions_Integration() {
 	t := suite.T()
-	db := suite.connection
+	db := suite.db
 	manager := suite.manager
 
 	// Setup test data
@@ -830,7 +831,7 @@ func (suite *PostgresPolicyManagerIntegrationTestSuite) TestUpdateGroupPermissio
 
 func (suit *PostgresPolicyManagerIntegrationTestSuite) TestCreateGroup_Integration() {
 	t := suit.T()
-	db := suit.connection
+	db := suit.db
 	manager := suit.manager
 	groupName := uuid.NewString()
 
@@ -851,7 +852,7 @@ func (suit *PostgresPolicyManagerIntegrationTestSuite) TestCreateGroup_Integrati
 
 func (suit *PostgresPolicyManagerIntegrationTestSuite) TestCreatePermission_Integration() {
 	t := suit.T()
-	db := suit.connection
+	db := suit.db
 	manager := suit.manager
 	permissionName := uuid.NewString()
 
@@ -870,9 +871,136 @@ func (suit *PostgresPolicyManagerIntegrationTestSuite) TestCreatePermission_Inte
 	assert.Equal(t, permissionName, name)
 }
 
+func (suit *PostgresPolicyManagerIntegrationTestSuite) TestUpdateGroupUsers_Integration() {
+	t := suit.T()
+	db := suit.db
+	manager := suit.manager
+	groupId, _ := addTestGroup(t, suit.ctx, db)
+	user1 := uuid.NewString()
+	user2 := uuid.NewString()
+	users := []string{user1, user2}
+
+	// Run the function
+	err := manager.UpdateGroupUsers(suit.ctx, groupId, users)
+	assert.NoError(t, err)
+
+	// Verify the results
+	var user string
+	count := 0
+	rows, err := db.Query(suit.ctx, "SELECT id FROM subjects WHERE group_id = $1", groupId)
+	assert.NoError(t, err)
+	defer rows.Close()
+
+	for rows.Next() {
+		rows.Scan(&user)
+		assert.Contains(t, users, user)
+		count++
+	}
+
+	assert.Equal(t, len(users), count)
+}
+
+func (suit *PostgresPolicyManagerIntegrationTestSuite) TestDeleteGroup_Integration() {
+	t := suit.T()
+	db := suit.db
+	manager := suit.manager
+	groupId, _ := addTestGroup(t, suit.ctx, db)
+
+	// Run the function
+	err := manager.DeleteGroup(suit.ctx, groupId)
+	assert.NoError(t, err)
+
+	// Verify the results
+	var count int
+	err = db.QueryRow(suit.ctx, "SELECT COUNT(*) FROM groups WHERE id = $1", groupId).Scan(&count)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func (suit *PostgresPolicyManagerIntegrationTestSuite) TestChangeGroupName_Integration() {
+	t := suit.T()
+	db := suit.db
+	manager := suit.manager
+	groupId, groupName := addTestGroup(t, suit.ctx, db)
+	newGroupName := uuid.NewString()
+	assert.NotEqual(t, groupName, newGroupName)
+
+	// Run the function
+	err := manager.ChangeGroupName(suit.ctx, groupId, newGroupName)
+	assert.NoError(t, err)
+
+	// Verify the results
+	var name string
+	err = db.QueryRow(suit.ctx, "SELECT name FROM groups WHERE id = $1", groupId).Scan(&name)
+	assert.NoError(t, err)
+	assert.Equal(t, newGroupName, name)
+}
+
+func (suit *PostgresPolicyManagerIntegrationTestSuite) TestDeleteUser_Integration() {
+	t := suit.T()
+	db := suit.db
+	manager := suit.manager
+	groupId1, _ := addTestGroup(t, suit.ctx, db)
+	groupId2, _ := addTestGroup(t, suit.ctx, db)
+	userId := uuid.NewString()
+
+	addTestUser(t, suit.ctx, db, userId, groupId1)
+	addTestUser(t, suit.ctx, db, userId, groupId2)
+
+	// Run the function
+	err := manager.DeleteUser(suit.ctx, userId)
+	assert.NoError(t, err)
+
+	// Verify the results
+	var count int
+	err = db.QueryRow(suit.ctx, "SELECT COUNT(*) FROM subjects WHERE id = $1", userId).Scan(&count)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func (suit *PostgresPolicyManagerIntegrationTestSuite) TestReadPolicy_Integration() {
+	t := suit.T()
+	db := suit.db
+	manager := suit.manager
+
+	// Setup test data
+	userId := uuid.NewString()
+	groupId, groupName := addTestGroup(t, suit.ctx, db)
+	permissionId, permissionName := addTestPermission(t, suit.ctx, db)
+	addTestUser(t, suit.ctx, db, userId, groupId)
+	addTestGroupPermission(t, suit.ctx, db, groupId, permissionId)
+
+	// Run the function
+	policy, err := manager.ReadPolicy(suit.ctx)
+	assert.NoError(t, err)
+
+	// Verify the results
+	assert.NotNil(t, policy)
+	assert.Condition(t, func() bool {
+		for _, group := range policy.Groups {
+			if group.Name == groupName {
+				if len(group.Users) == 1 && group.Users[0] == userId {
+					return true
+				}
+			}
+		}
+		return false
+	})
+	assert.Condition(t, func() bool {
+		for _, permission := range policy.Permissions {
+			if permission.Name == permissionName {
+				if len(permission.Groups) == 1 && permission.Groups[0] == groupName {
+					return true
+				}
+			}
+		}
+		return false
+	})
+}
+
 // Helper functions for test setup and data generation
 
-func addTestGroup(t *testing.T, ctx context.Context, db *pgx.Conn) (int, string) {
+func addTestGroup(t *testing.T, ctx context.Context, db *pgxpool.Pool) (int, string) {
 	var groupId int
 	groupName := uuid.NewString()
 	err := db.QueryRow(ctx, "INSERT INTO groups (name, version) VALUES ($1, 1) RETURNING id", groupName).Scan(&groupId)
@@ -883,7 +1011,7 @@ func addTestGroup(t *testing.T, ctx context.Context, db *pgx.Conn) (int, string)
 	return groupId, groupName
 }
 
-func addTestPermission(t *testing.T, ctx context.Context, db *pgx.Conn) (int, string) {
+func addTestPermission(t *testing.T, ctx context.Context, db *pgxpool.Pool) (int, string) {
 	var permissionId int
 	permissionName := uuid.NewString()
 	err := db.QueryRow(ctx, "INSERT INTO permissions (name, version) VALUES ($1, 1) RETURNING id", permissionName).Scan(&permissionId)
@@ -892,4 +1020,18 @@ func addTestPermission(t *testing.T, ctx context.Context, db *pgx.Conn) (int, st
 	}
 
 	return permissionId, permissionName
+}
+
+func addTestUser(t *testing.T, ctx context.Context, db *pgxpool.Pool, userId string, groupId int) {
+	_, err := db.Exec(ctx, "INSERT INTO subjects (id, group_id) VALUES ($1, $2)", userId, groupId)
+	if err != nil {
+		t.Fatalf("Failed to add test user: %v", err)
+	}
+}
+
+func addTestGroupPermission(t *testing.T, ctx context.Context, db *pgxpool.Pool, groupId int, permissionId int) {
+	_, err := db.Exec(ctx, "INSERT INTO group_permissions (group_id, permission_id) VALUES ($1, $2)", groupId, permissionId)
+	if err != nil {
+		t.Fatalf("Failed to add test group permission: %v", err)
+	}
 }

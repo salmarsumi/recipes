@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/salmarsumi/recipes/internal/authz"
 	"github.com/salmarsumi/recipes/internal/authz/store"
 )
@@ -294,7 +295,8 @@ func (manager *PostgresPolicyManager) ReadPolicy(ctx context.Context) (*authz.Po
 	}
 
 	groups := make(map[string]authz.Group)
-	var groupName, userId string
+	var groupName string
+	var userId pgtype.Text
 	for rows.Next() {
 		err = rows.Scan(&groupName, &userId)
 		if err != nil {
@@ -303,9 +305,15 @@ func (manager *PostgresPolicyManager) ReadPolicy(ctx context.Context) (*authz.Po
 		}
 
 		if group, ok := groups[groupName]; ok {
-			group.Users = append(group.Users, userId)
+			if userId.Valid {
+				group.Users = append(group.Users, userId.String)
+			}
 		} else {
-			groups[groupName] = authz.Group{Name: groupName, Users: []string{userId}}
+			users := []string{}
+			if userId.Valid {
+				users = append(users, userId.String)
+			}
+			groups[groupName] = authz.Group{Name: groupName, Users: users}
 		}
 	}
 
@@ -323,17 +331,24 @@ func (manager *PostgresPolicyManager) ReadPolicy(ctx context.Context) (*authz.Po
 
 	permissions := make(map[string]authz.Permission)
 	var permissionName string
+	var permissionGroup pgtype.Text
 	for rows.Next() {
-		err = rows.Scan(&permissionName, &groupName)
+		err = rows.Scan(&permissionName, &permissionGroup)
 		if err != nil {
-			logger.Error("failed to permission groups", "error", err)
+			logger.Error("failed to scan permission groups", "error", err)
 			return nil, store.NewDefaultError()
 		}
 
 		if permission, ok := permissions[permissionName]; ok {
-			permission.Groups = append(permission.Groups, groupName)
+			if permissionGroup.Valid {
+				permission.Groups = append(permission.Groups, permissionGroup.String)
+			}
 		} else {
-			permissions[permissionName] = authz.Permission{Name: permissionName, Groups: []string{groupName}}
+			groups := []string{}
+			if permissionGroup.Valid {
+				groups = append(groups, permissionGroup.String)
+			}
+			permissions[permissionName] = authz.Permission{Name: permissionName, Groups: groups}
 		}
 	}
 
